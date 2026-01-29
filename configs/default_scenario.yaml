@@ -1,0 +1,59 @@
+# Radar Signal Processing & Target Tracking System Simulator
+# Default Scenario Configuration
+
+scenario:
+  name: "Baseline Multi-Target Scenario"
+  description: "Two moving targets with moderate noise and no interference."
+
+radar:
+  carrier_frequency_hz: 9.6e9          # X-band radar (~9.6 GHz)
+  bandwidth_hz: 20e6                   # 20 MHz bandwidth
+  pulse_repetition_frequency_hz: 1000  # PRF = 1 kHz
+  transmit_power_w: 1000               # 1 kW
+  antenna_gain_db: 30                  # Antenna gain
+  noise_figure_db: 5                   # Receiver noise figure
+  sampling_rate_hz: 40e6               # Sampling rate (>= bandwidth)
+
+environment:
+  noise_floor_db: -90                  # Background noise floor
+  clutter_enabled: false
+  interference_enabled: false
+
+targets:
+  - id: 1
+    initial_position_m: [1000, 500]    # x, y in meters
+    velocity_mps: [-50, 0]             # vx, vy in m/s
+    radar_cross_section_m2: 10
+    motion_model: "constant_velocity"
+
+  - id: 2
+    initial_position_m: [2000, -300]
+    velocity_mps: [-30, 20]
+    radar_cross_section_m2: 5
+    motion_model: "constant_velocity"
+
+simulation:
+  time_step_s: 0.01                    # 10 ms per frame
+  duration_s: 10                      # Total simulation time
+  enable_fault_injection: false
+
+fault_injection:
+  noise_spike:
+    enabled: false
+    spike_probability: 0.01
+    spike_magnitude_db: 20
+
+  signal_dropout:
+    enabled: false
+    dropout_probability: 0.005
+    dropout_duration_frames: 5
+
+  latency_injection:
+    enabled: false
+    latency_ms: 50
+
+output:
+  save_results: true
+  output_directory: "outputs/"
+  generate_plots: true
+  generate_logs: true
