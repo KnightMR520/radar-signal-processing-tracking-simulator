@@ -114,55 +114,89 @@ def generate_iq_returns(scenario: Scenario, trajectories: np.ndarray) -> np.ndar
     """
     Generates complex IQ radar returns for all targets over time,
     including noise, clutter, and interference.
-
-    Parameters:
-        scenario: Scenario object with radar and environment parameters
-        trajectories: np.ndarray of shape (num_targets, num_time_steps, 3) containing
-                      target positions at each time step
-
-    Returns:
-        iq_signal: complex ndarray of IQ samples
     """
     c = 3e8  # speed of light (m/s)
     t = np.arange(0, scenario.duration, scenario.time_step)
-    iq_signal = np.zeros(len(t), dtype=complex)
+    num_samples = len(t)
+    iq_signal = np.zeros(num_samples, dtype=complex)
 
     num_targets = trajectories.shape[0]
+    radar_pos = np.array(scenario.radar_position)
 
-    for i in range(num_targets):
-        pos = trajectories[i]  # shape: (num_time_steps, 3)
-        # Compute instantaneous range from radar
-        ranges = np.linalg.norm(pos - scenario.radar_position, axis=1)
+    for target_idx in range(num_targets):
+        positions = trajectories[target_idx]
+        rcs = scenario.targets[target_idx].rcs
 
-        # Round-trip delay (for future pulse compression)
-        range_delays = 2 * ranges / c
+        for i, pos in enumerate(positions):
+            range_to_target = np.linalg.norm(pos - radar_pos)
+            delay = 2 * range_to_target / c
+            phase = 2 * np.pi * scenario.radar_params.carrier_frequency * delay
 
-        # Doppler approximation: use velocity along line-of-sight
-        # Compute velocity as finite difference along trajectory
-        vel = np.gradient(pos, scenario.time_step, axis=0)
-        rel_vel = vel - scenario.radar_velocity
-        los_unit = (pos - scenario.radar_position) / (ranges[:, np.newaxis] + 1e-6)
-        doppler_freq = 2 * np.sum(rel_vel * los_unit, axis=1) / (c / scenario.radar_params.carrier_frequency)
+            amplitude = rcs / (range_to_target ** 4 + 1e-6)
+            iq_signal[i] += amplitude * np.exp(1j * phase)
 
-        # Amplitude model
-        amplitude = np.sqrt(scenario.targets[i].rcs) / (ranges ** 2 + 1e-6)
-        phase = 2 * np.pi * doppler_freq * t
+    # Add noise, clutter, and interference
+    env = scenario.environment
 
-        iq_signal += amplitude * np.exp(1j * phase)
+    noise = generate_thermal_noise(
+        num_samples,
+        noise_figure_db=env.noise_figure,
+        bandwidth=scenario.radar_params.bandwidth,
+    )
 
-    # --- Noise model ---
-    noise_power = 10 ** (scenario.environment.noise_figure / 10)
-    noise = np.sqrt(noise_power / 2) * (np.random.randn(len(t)) + 1j * np.random.randn(len(t)))
-    iq_signal += noise
+    clutter = generate_clutter(
+        num_samples,
+        clutter_density=env.clutter_density,
+    )
 
-    # --- Clutter model ---
-    clutter_power = scenario.environment.clutter_density
-    clutter = np.sqrt(clutter_power / 2) * (np.random.randn(len(t)) + 1j * np.random.randn(len(t)))
-    iq_signal += clutter
+    interference = generate_interference(
+        num_samples,
+        interference_level=env.interference_level,
+    )
 
-    # --- Interference model ---
-    interference_power = scenario.environment.interference_level
-    interference = np.sqrt(interference_power / 2) * (np.random.randn(len(t)) + 1j * np.random.randn(len(t)))
-    iq_signal += interference
+    iq_signal += noise + clutter + interference
 
     return iq_signal
+
+def generate_thermal_noise(num_samples, noise_figure_db, bandwidth):
+    """
+    Generate complex thermal noise based on kTB and noise figure.
+    """
+    k = 1.38e-23  # Boltzmann constant
+    T = 290       # Standard noise temperature (K)
+    noise_power = k * T * bandwidth
+    noise_figure_linear = 10 ** (noise_figure_db / 10)
+    total_noise_power = noise_power * noise_figure_linear
+
+    sigma = np.sqrt(total_noise_power / 2)
+    noise = sigma * (np.random.randn(num_samples) + 1j * np.random.randn(num_samples))
+    return noise
+
+
+def generate_clutter(num_samples, clutter_density):
+    """
+    Generate clutter as low-frequency correlated complex noise.
+    """
+    white = np.random.randn(num_samples) + 1j * np.random.randn(num_samples)
+
+    # Simple low-pass filter for correlation (moving average)
+    kernel_size = max(1, int(clutter_density * 20))
+    kernel = np.ones(kernel_size) / kernel_size
+    clutter = np.convolve(white, kernel, mode="same")
+
+    return clutter
+
+
+def generate_interference(num_samples, interference_level):
+    """
+    Generate structured interference (e.g., narrowband jammer).
+    """
+    t = np.arange(num_samples)
+    freq = np.random.uniform(0.01, 0.1)  # normalized frequency
+    phase = np.random.uniform(0, 2 * np.pi)
+    tone = np.exp(1j * (2 * np.pi * freq * t + phase))
+
+    amplitude = interference_level * np.random.uniform(0.5, 1.5)
+    interference = amplitude * tone
+
+    return interference

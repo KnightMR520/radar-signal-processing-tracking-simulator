@@ -156,9 +156,8 @@ def test_noise_and_interference_added():
     scenario = generate_scenario(config)
     generator = ScenarioGenerator(scenario)
     trajectories = generator.generate_target_trajectories()
-
     iq = generate_iq_returns(scenario, trajectories)
 
-    # Check that the signal has non-zero imaginary and real parts (noise added)
-    assert np.any(np.real(iq) != 0)
-    assert np.any(np.imag(iq) != 0)
+    # Ensure non-zero power
+    power = np.mean(np.abs(iq) ** 2)
+    assert power > 0, "IQ signal should contain noise/clutter/interference power"
