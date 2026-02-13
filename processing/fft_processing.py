@@ -33,6 +33,8 @@ def range_fft(iq_data: np.ndarray, n_fft: int = None) -> np.ndarray:
     windowed = apply_window(iq_data, window_type="hann")
     return np.fft.fft(windowed, n=n_fft, axis=1)
 
+    #return np.fft.fft(iq_data, n=n_fft, axis=1)
+
 
 def doppler_fft(range_profiles: np.ndarray, n_fft: int = None) -> np.ndarray:
     """
@@ -50,6 +52,7 @@ def doppler_fft(range_profiles: np.ndarray, n_fft: int = None) -> np.ndarray:
 
     windowed = apply_window(range_profiles.T, window_type="hann").T
     doppler = np.fft.fft(windowed, n=n_fft, axis=0)
+    #doppler = np.fft.fft(range_profiles, n=n_fft, axis=0)
     return np.fft.fftshift(doppler, axes=0)
 
 
