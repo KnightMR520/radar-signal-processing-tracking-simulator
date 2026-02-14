@@ -45,11 +45,18 @@ def cfar_2d(
             cut_r_end = t_r + 2 * g_r + 1
             cut_d_start = t_d
             cut_d_end = t_d + 2 * g_d + 1
-            window_copy = window.copy()
-            window_copy[cut_r_start:cut_r_end, cut_d_start:cut_d_end] = 0
+            
+            # Build a boolean mask of training cells (True = training, False = guard/CUT)
+            train_mask = np.ones_like(window, dtype=bool)
+            train_mask[cut_r_start:cut_r_end, cut_d_start:cut_d_end] = False
 
-            noise_level = np.sum(window_copy) / num_train
-            threshold = alpha * noise_level
+            training_values = window[train_mask]
+
+            # Robust noise estimate + floor to avoid threshold collapse
+            noise_level = float(np.mean(training_values))
+            noise_floor = 1e-12
+            threshold = alpha * max(noise_level, noise_floor)
+
 
             if rd_map[r, d] > threshold:
                 detections[r, d] = True
@@ -70,7 +77,8 @@ def suppress_to_local_max(detections: np.ndarray,
     """
 
     # Label connected detection regions
-    labeled_array, num_features = label(detections)
+    structure = np.ones((3, 3), dtype=int)  # 8-connected neighborhood
+    labeled_array, num_features = label(detections, structure=structure)
 
     pruned = np.zeros_like(detections, dtype=bool)
 

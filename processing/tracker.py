@@ -1,5 +1,3 @@
-# tracking/tracker.py
-
 import numpy as np
 
 
@@ -101,15 +99,12 @@ class MultiTargetTracker:
         """
         detections = [np.array(d) for d in detections]
 
-        # 1️⃣ Predict
         for track in self.tracks:
             track.predict()
             track.age += 1
 
-        # 2️⃣ Associate
         matches, unmatched = self._associate(detections)
 
-        # 3️⃣ Update matched tracks
         matched_tracks = set()
 
         for track, measurement in matches:
@@ -122,18 +117,15 @@ class MultiTargetTracker:
 
             matched_tracks.add(track)
 
-        # 4️⃣ Increment misses for unmatched tracks
         for track in self.tracks:
             if track not in matched_tracks:
                 track.misses += 1
 
-        # 5️⃣ Delete dead tracks
         self.tracks = [
             t for t in self.tracks
             if t.misses < self.max_misses
         ]
 
-        # 6️⃣ Create new tracks for unmatched detections
         for det in unmatched:
             new_track = Track(self.next_id, det)
             self.tracks.append(new_track)
