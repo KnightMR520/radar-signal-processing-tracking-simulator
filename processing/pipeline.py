@@ -1,6 +1,6 @@
 import numpy as np
 from processing.fft_processing import range_doppler_map
-from processing.detection import cfar_2d
+from processing.detection import cfar_2d, suppress_to_local_max
 
 
 def process_iq_data(
@@ -41,11 +41,12 @@ def process_iq_data(
         magnitude_map = np.abs(rd_map)
 
     # Step 4: CFAR Detection
-    detections = cfar_2d(
+    raw_detections = cfar_2d(
         magnitude_map,
         guard_cells=guard_cells,
         training_cells=training_cells,
         pfa=pfa,
     )
+    detections = suppress_to_local_max(raw_detections, magnitude_map)
 
     return rd_map, magnitude_map, detections

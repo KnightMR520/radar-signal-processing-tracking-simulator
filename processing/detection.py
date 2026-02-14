@@ -1,5 +1,5 @@
 import numpy as np
-
+from scipy.ndimage import label
 
 def cfar_2d(
     rd_map: np.ndarray,
@@ -55,3 +55,38 @@ def cfar_2d(
                 detections[r, d] = True
 
     return detections
+
+def suppress_to_local_max(detections: np.ndarray,
+                          magnitude_map: np.ndarray) -> np.ndarray:
+    """
+    Reduce clustered detections to a single local maximum per cluster.
+
+    Parameters:
+        detections: boolean array from CFAR (same shape as magnitude_map)
+        magnitude_map: power map used for detection
+
+    Returns:
+        pruned_detections: boolean array with one True per cluster
+    """
+
+    # Label connected detection regions
+    labeled_array, num_features = label(detections)
+
+    pruned = np.zeros_like(detections, dtype=bool)
+
+    for region_id in range(1, num_features + 1):
+        region_mask = labeled_array == region_id
+
+        if not np.any(region_mask):
+            continue
+
+        # Find index of maximum magnitude within this region
+        region_values = magnitude_map * region_mask
+        max_index = np.unravel_index(
+            np.argmax(region_values),
+            magnitude_map.shape
+        )
+
+        pruned[max_index] = True
+
+    return pruned
