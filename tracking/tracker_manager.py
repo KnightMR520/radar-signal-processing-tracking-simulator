@@ -60,6 +60,7 @@ class TrackerManager:
         self.birth_tol = np.array([2.0, 2.0])       # bins: [range_tol, doppler_tol]
         self.cand_max_misses = 1                    # candidate can disappear briefly
         self._candidates: list[dict] = []           # {"z": np.array([r,d]), "hits": int, "misses": int}
+        self.birth_enabled = True
 
     @property
     def tracks(self) -> list[Track]:
@@ -98,6 +99,10 @@ class TrackerManager:
         Update candidate pool with unassigned measurements.
         Spawn a real track only after `birth_hits` consistent observations.
         """
+
+        if not self.birth_enabled:
+                return
+
         # Age candidates
         for c in self._candidates:
             c["misses"] += 1
@@ -200,3 +205,9 @@ class TrackerManager:
         self._update_candidates_and_spawn(unassigned_Z)
 
         return list(self._tracks)
+
+    def set_birth_enabled(self, enabled: bool) -> None:
+        self.birth_enabled = bool(enabled)
+        if not self.birth_enabled:
+            # optional: clear candidates so old candidates don't spawn later
+            self._candidates.clear()

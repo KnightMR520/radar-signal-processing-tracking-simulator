@@ -17,8 +17,11 @@ def test_noise_spike_changes_iq_when_prob_1():
     fi = FaultInjector(cfg)
 
     iq = np.zeros((4, 8), dtype=np.complex128)
-    out = fi.maybe_noise_spike(iq)
+    out, injected = fi.maybe_noise_spike(iq)
+
+    assert injected is True
     assert np.any(np.abs(out) > 0)
+
 
 
 def test_drop_measurements_reduces_list():

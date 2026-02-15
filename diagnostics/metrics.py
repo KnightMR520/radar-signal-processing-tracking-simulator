@@ -1,132 +1,91 @@
 # diagnostics/metrics.py
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from collections import deque
-from typing import Deque, Dict, Optional
 import time
+from typing import Dict, Any
+
+
+# -----------------------------
+# Metric keys
+# -----------------------------
+TRACKS_ACTIVE = "tracks_active"
+TRACKS_CONFIRMED = "tracks_confirmed"
+PIPELINE_LATENCY = "pipeline_latency_s"
+CFAR_DETECTIONS = "cfar_detections_total"
+FAULTS_INJECTED = "faults_injected_total"
+
+# NEW: raw CFAR count per frame (pre-suppression)
+CFAR_RAW_THIS_FRAME = "cfar_raw_this_frame"
 
 
 @dataclass
-class RollingWindow:
-    """
-    Fixed-size rolling window for numeric values.
-    Used for computing rolling mean/max/min without heavy dependencies.
-    """
-    maxlen: int
-    values: Deque[float] = field(default_factory=deque)
+class _TimerStats:
+    samples: deque  # of float seconds
 
-    def add(self, x: float) -> None:
-        if self.maxlen <= 0:
-            return
-        if len(self.values) >= self.maxlen:
-            self.values.popleft()
-        self.values.append(float(x))
+    def add(self, x: float, maxlen: int):
+        self.samples.append(x)
+        while len(self.samples) > maxlen:
+            self.samples.popleft()
 
-    def mean(self) -> float:
-        if not self.values:
-            return 0.0
-        return sum(self.values) / len(self.values)
-
-    def max(self) -> float:
-        if not self.values:
-            return 0.0
-        return max(self.values)
-
-    def min(self) -> float:
-        if not self.values:
-            return 0.0
-        return min(self.values)
-
-    def count(self) -> int:
-        return len(self.values)
+    def summary(self) -> Dict[str, float]:
+        if not self.samples:
+            return {"count": 0, "mean_s": 0.0, "p95_s": 0.0, "max_s": 0.0}
+        arr = sorted(self.samples)
+        n = len(arr)
+        mean_s = sum(arr) / n
+        p95_s = arr[int(0.95 * (n - 1))]
+        max_s = arr[-1]
+        return {"count": n, "mean_s": mean_s, "p95_s": p95_s, "max_s": max_s}
 
 
 class MetricsRegistry:
     """
-    Simple in-process metrics registry.
-
-    Types:
+    Very small metrics registry:
       - counters: monotonically increasing
-      - gauges: instantaneous numeric values
-      - timers: durations (records into rolling window)
+      - gauges: last value (overwrite)
+      - timers: sliding-window timings (seconds)
     """
 
     def __init__(self, window_size: int = 200):
+        self.window_size = int(window_size)
         self._counters: Dict[str, int] = {}
         self._gauges: Dict[str, float] = {}
-        self._timers: Dict[str, RollingWindow] = {}
-        self._window_size = int(window_size)
+        self._timers: Dict[str, _TimerStats] = {}
 
-    # -------- Counters --------
-    def inc(self, name: str, amount: int = 1) -> None:
-        self._counters[name] = int(self._counters.get(name, 0) + amount)
+    def inc(self, key: str, amount: int = 1) -> None:
+        self._counters[key] = int(self._counters.get(key, 0)) + int(amount)
 
-    def get_counter(self, name: str) -> int:
-        return int(self._counters.get(name, 0))
+    def set_gauge(self, key: str, value: float) -> None:
+        self._gauges[key] = float(value)
 
-    # -------- Gauges --------
-    def set_gauge(self, name: str, value: float) -> None:
-        self._gauges[name] = float(value)
+    def observe(self, key: str, value_s: float) -> None:
+        if key not in self._timers:
+            self._timers[key] = _TimerStats(samples=deque())
+        self._timers[key].add(float(value_s), self.window_size)
 
-    def get_gauge(self, name: str) -> float:
-        return float(self._gauges.get(name, 0.0))
-
-    # -------- Timers --------
-    def observe(self, name: str, seconds: float) -> None:
-        if name not in self._timers:
-            self._timers[name] = RollingWindow(self._window_size)
-        self._timers[name].add(seconds)
-
-    def timer_mean(self, name: str) -> float:
-        return self._timers[name].mean() if name in self._timers else 0.0
-
-    def timer_max(self, name: str) -> float:
-        return self._timers[name].max() if name in self._timers else 0.0
-
-    def snapshot(self) -> dict:
-        """
-        Stable snapshot for logging / tests.
-        """
-        timers = {
-            k: {
-                "count": w.count(),
-                "mean_s": w.mean(),
-                "max_s": w.max(),
-                "min_s": w.min(),
-            }
-            for k, w in self._timers.items()
-        }
+    def snapshot(self) -> Dict[str, Any]:
         return {
             "counters": dict(self._counters),
             "gauges": dict(self._gauges),
-            "timers": timers,
+            "timers": {k: v.summary() for k, v in self._timers.items()},
         }
 
 
 class Timer:
-    """
-    Context manager for timing blocks.
-    """
-    def __init__(self, registry: MetricsRegistry, name: str):
-        self.registry = registry
-        self.name = name
-        self.t0: Optional[float] = None
+    """Context manager for timing blocks into MetricsRegistry timers (seconds)."""
+
+    def __init__(self, metrics: MetricsRegistry, key: str):
+        self.metrics = metrics
+        self.key = key
+        self._t0 = 0.0
 
     def __enter__(self):
-        self.t0 = time.perf_counter()
+        self._t0 = time.perf_counter()
         return self
 
     def __exit__(self, exc_type, exc, tb):
-        if self.t0 is None:
-            return
-        dt = time.perf_counter() - self.t0
-        self.registry.observe(self.name, dt)
-
-
-# Convenience constants for names (helps consistency)
-PIPELINE_LATENCY = "pipeline.latency_s"
-CFAR_DETECTIONS = "cfar.detections"
-TRACKS_ACTIVE = "tracks.active"
-TRACKS_CONFIRMED = "tracks.confirmed"
-FAULTS_INJECTED = "faults.injected"
+        dt = time.perf_counter() - self._t0
+        self.metrics.observe(self.key, dt)
+        return False
