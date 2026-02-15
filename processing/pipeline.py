@@ -58,10 +58,15 @@ def process_iq_data(
             metrics.inc(FAULTS_INJECTED, 1)
 
         # 2) Jammer line (structured interference)
-        iq_data3, injected_jammer = fault_injector.maybe_jammer_line(iq_data)
+        iq_data2, injected_noise = fault_injector.maybe_noise_spike(maybe_iq)
+        iq_data3, injected_jammer = fault_injector.maybe_jammer_line(iq_data2)
         iq_data = iq_data3
-        if metrics is not None and injected_jammer:
-            metrics.inc(FAULTS_INJECTED, 1)
+
+        if metrics is not None:
+            if injected_noise:
+                metrics.inc(FAULTS_INJECTED, 1)
+            if injected_jammer:
+                metrics.inc(FAULTS_INJECTED, 1)
 
         # 3) Param faults
         pfa = fault_injector.maybe_override_cfar(pfa)

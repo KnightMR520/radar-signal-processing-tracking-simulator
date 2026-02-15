@@ -10,36 +10,30 @@ import numpy as np
 class FaultConfig:
     enabled: bool = False
 
-    # fault toggles
-    drop_iq_frames: float = 0.0              # probability [0..1]
-    drop_measurements: float = 0.0           # probability [0..1]
+    drop_iq_frames: float = 0.0
+    drop_measurements: float = 0.0
 
-    # OLD "uniform noise spike" (kept, but not great for CFAR blow-up)
-    noise_spike_prob: float = 0.0            # probability [0..1]
-    noise_spike_scale: float = 10.0          # multiplier
+    # Noise spike (NEW: mode + patch sizing)
+    noise_spike_prob: float = 0.0
+    noise_spike_scale: float = 10.0
+    noise_spike_mode: str = "uniform"   # "uniform" | "patch" | "impulse"
+    noise_patch_pulses: int = 8         # used when mode="patch"
+    noise_patch_samples: int = 16       # used when mode="patch"
+    impulse_density: float = 0.02       # used when mode="impulse" (fraction of cells)
 
-    # NEW: structured interference that *will* create many detections
+    # NEW: structured interference that will create many detections
     jammer_line_prob: float = 0.0            # probability [0..1]
     jammer_line_scale: float = 50.0          # amplitude of jammer
     jammer_mode: str = "range"               # "range" or "doppler"
     jammer_bin: Optional[int] = None         # if None, random each time
 
     cfar_pfa_override: Optional[float] = None
-    freeze_tracker_updates: float = 0.0      # probability [0..1]
+    freeze_tracker_updates: float = 0.0
 
     rng_seed: Optional[int] = None
 
 
 class FaultInjector:
-    """
-    Applies configured faults at well-defined injection points.
-
-    Key note:
-      - Uniformly increasing noise often does NOT increase CFAR detections
-        because CA-CFAR adapts its threshold to the noise estimate.
-      - Structured interference (range line / Doppler line) DOES create many detections.
-    """
-
     def __init__(self, config: FaultConfig | Dict[str, Any] | None = None):
         if config is None:
             config = FaultConfig()
@@ -53,42 +47,61 @@ class FaultInjector:
             return False
         return self.rng.random() < float(prob)
 
-    # -------- IQ faults --------
     def maybe_drop_iq(self, iq_data: np.ndarray) -> Optional[np.ndarray]:
-        """Return None to simulate a dropped frame."""
         if self._p(self.cfg.drop_iq_frames):
             return None
         return iq_data
 
     def maybe_noise_spike(self, iq_data: np.ndarray) -> tuple[np.ndarray, bool]:
         """
-        Inject a noise burst into IQ.
-
-        Returns:
-            (iq_out, injected)
+        Returns (iq_out, injected).
         """
-        if self._p(self.cfg.noise_spike_prob):
-            spike = float(self.cfg.noise_spike_scale)
-            noise = (
-                self.rng.standard_normal(iq_data.shape)
-                + 1j * self.rng.standard_normal(iq_data.shape)
-            )
-            # Make a NEW array (do not mutate input in-place)
-            return (iq_data + spike * noise), True
+        if not self._p(self.cfg.noise_spike_prob):
+            return iq_data, False
 
-        return iq_data, False
-    
+        scale = float(self.cfg.noise_spike_scale)
+        mode = str(self.cfg.noise_spike_mode).lower().strip()
+
+        P, N = iq_data.shape
+        noise = (self.rng.standard_normal((P, N)) + 1j * self.rng.standard_normal((P, N)))
+
+        if mode == "uniform":
+            # Old behavior: CFAR often adapts, so detections may NOT explode.
+            return (iq_data + scale * noise), True
+
+        if mode == "patch":
+            # Burst in a random rectangular region (creates many outliers vs neighbors)
+            hp = int(np.clip(self.cfg.noise_patch_pulses, 1, P))
+            hn = int(np.clip(self.cfg.noise_patch_samples, 1, N))
+            p0 = int(self.rng.integers(0, P - hp + 1))
+            n0 = int(self.rng.integers(0, N - hn + 1))
+
+            out = iq_data.copy()
+            out[p0:p0 + hp, n0:n0 + hn] += scale * noise[p0:p0 + hp, n0:n0 + hn]
+            return out, True
+
+        if mode == "impulse":
+            # Sparse impulsive cells (very CFAR-unfriendly)
+            density = float(self.cfg.impulse_density)
+            density = float(np.clip(density, 0.0, 1.0))
+            mask = self.rng.random((P, N)) < density
+
+            out = iq_data.copy()
+            out[mask] += scale * noise[mask]
+            return out, True
+
+        # Fallback: behave like uniform
+        return (iq_data + scale * noise), True
     
     def maybe_jammer_line(self, iq_data: np.ndarray) -> tuple[np.ndarray, bool]:
         """
-        Inject structured interference (range or doppler line).
-
-        Returns:
-            (iq_out, injected)
+        Inject a structured jammer ridge (range or doppler line).
+        Returns (iq_out, injected)
         """
         if self._p(self.cfg.jammer_line_prob):
             return self._inject_jammer_line(iq_data), True
         return iq_data, False
+
 
 
 
@@ -139,17 +152,13 @@ class FaultInjector:
 
         return iq_data + scale * jammer
 
-    # -------- Parameter faults --------
     def maybe_override_cfar(self, pfa: float) -> float:
         if self.cfg.enabled and self.cfg.cfar_pfa_override is not None:
             return float(self.cfg.cfar_pfa_override)
         return float(pfa)
 
-    # -------- Measurement faults --------
     def maybe_drop_measurements(self, measurements: list[np.ndarray]) -> list[np.ndarray]:
-        if not self.cfg.enabled:
-            return measurements
-        if self.cfg.drop_measurements <= 0:
+        if not self.cfg.enabled or self.cfg.drop_measurements <= 0:
             return measurements
         kept = []
         for m in measurements:
@@ -157,7 +166,5 @@ class FaultInjector:
                 kept.append(m)
         return kept
 
-    # -------- Tracker faults --------
     def freeze_tracker(self) -> bool:
-        """If True, skip tracker update this frame (predict-only)."""
         return self._p(self.cfg.freeze_tracker_updates)

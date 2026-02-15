@@ -53,22 +53,33 @@ metrics = MetricsRegistry(window_size=200)
 fault_injector = FaultInjector(FaultConfig(
     enabled=True,
     rng_seed=123,
-    jammer_line_prob=1,     
-    jammer_line_scale=0.5,   # <- strong
-    jammer_mode="range",      # "range" tends to create vertical ridge
-    # jammer_mode="doppler",  # or try this for horizontal ridge
-))
 
+    # Force “noise” every frame, but make it CFAR-visible:
+    noise_spike_prob=1,
+    noise_spike_scale=30.0,
+    noise_spike_mode="patch",     # <-- KEY CHANGE
+    noise_patch_pulses=12,
+    noise_patch_samples=24,
+
+    drop_iq_frames=0.01,
+    drop_measurements=0.05,
+))
 
 # -----------------------------
 # Health Monitor
 # Tune RAW CFAR enter/exit so it triggers on your spikes
 # -----------------------------
 health = HealthMonitor(HealthConfig(
-    raw_cfar_enter=32,   # enter degraded if >=200 raw CFAR hits/frame
-    raw_cfar_exit=28,
-    enter_count_required=2,
-    exit_count_required=4,
+    # keep high trigger disabled unless you want it
+    raw_cfar_enter=10_000,
+    raw_cfar_exit=8_000,
+
+    # LOW trigger (this is what you want)
+    raw_cfar_low_enter=2,     # enter if raw_cfar <= 2
+    raw_cfar_low_exit=15,     # exit once raw_cfar >= 10 consistently
+
+    enter_count_required=3,   # needs 3 bad frames in a row
+    exit_count_required=5,
 ))
 
 
@@ -171,12 +182,15 @@ for frame in range(200):
     # -----------------------------
     # Apply degraded-mode behaviors (PERSIST into next frame)
     # -----------------------------
-    if state == "DEGRADED":
-        # tighten CFAR threshold (lower PFA -> fewer false alarms)
+    if state == "DEGRADED" and "raw_cfar_low" in reason:
+        # make CFAR LESS strict so it can recover
+        pfa = 1e-2
+        K = 3
+        tracker.set_birth_enabled(True)   # births are fine; you’re starved
+    elif state == "DEGRADED":
+        # explosion case
         pfa = 1e-5
-        # reduce measurement bandwidth into tracker
         K = 2
-        # freeze births (stop new IDs from noise peaks)
         tracker.set_birth_enabled(False)
     else:
         pfa = 1e-3
